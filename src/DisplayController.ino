@@ -7,6 +7,8 @@
 #define NAK '\x15'  // Malformed recognised message
 #define CAN '\x18'  // Unrecognised message type
 
+#define ARRAY_LEN(x) (sizeof(x)/sizeof(x);
+
 /*
     MESSAGE STRUCTURE
     
@@ -24,21 +26,25 @@
     ETX marker      - 1 byte
     ============================
       MESSAGE TYPES
-    00    - Sync update
-    01    - Freq update
-    02    - Volume update
-    03    - Select update
-    FF    - Session close    
+    00    - Session start
+    01    - Sync update
+    02    - Freq update
+    03    - Volume update
+    04    - Select update
+    FF    - Session stop    
 */
 
-const char fixedHeaderSize = 5; //length plus checksum
+const char fixedHeaderSize = 5;
 char messageHeader[fixedHeaderSize];
 
 LiquidCrystal_I2C lcd(0x27 , 16, 2);
+
 char radioFrequencies[11][6];
 char radioVolume[11][1];
 
 unsigned long lastComTime;
+bool connected;
+bool inSession;
 
 void sendReply(char message = ACK)
 {
@@ -53,7 +59,7 @@ bool verifyChecksum(char messageHeader[], char messagePayload[])
 {
   // Extremely basic checksum
   char messageSum;
-  int payloadSize = sizeof(messagePayload)/sizeof(messagePayload[0]);
+  int payloadSize = 2;
   uint8_t messageCheckSum = messagePayload[payloadSize-1];
 
   for(int i = 0; i < fixedHeaderSize; i++)
@@ -76,7 +82,7 @@ bool verifyChecksum(char messageHeader[], char messagePayload[])
 
 void UpdateSettings(int radioNum, char message[])
 {
-  for(int i = 0; i < 7; i++)
+  for(int i = 0; i < 6; i++)
   {
     radioFrequencies[radioNum][i] = message[i];
   }
@@ -123,6 +129,29 @@ String SetDisplayFrequency(int radio)
   return ref;
 }
 
+void sessionStart(char message[])
+{
+  inSession = true;
+  for(int i = 0; i < 11; i++)
+  {
+    char radioSettings[6];
+    int radioOffset = i*6;
+
+    for(int j = 0; j < 6; j++)
+    {
+      radioSettings[j] = message[j+radioOffset];
+    }
+
+    UpdateSettings(i, radioSettings);
+  }
+}
+
+void sessionStop()
+{
+  inSession = false;
+  displayConnected();
+}
+
 void processIncomingSerial()
 {
   while(Serial.available() > 0)
@@ -146,19 +175,27 @@ void processIncomingSerial()
     {
       case 0:
         lastComTime = millis();
+        sessionStart(messagePayload);
         break;
       case 1:
+        lastComTime = millis();
+        break;
+      case 2:
         lastComTime = millis();
         UpdateSettings(radioNum, messagePayload);
         sendReply();
         break;
-      case 2:
+      case 3:
         lastComTime = millis();
         break;
-      case 3:
+      case 4:
         lastComTime = millis();
         SetDisplayRadio(radioNum);
         sendReply();
+        break;
+      case 255:
+        lastComTime = millis();
+        sessionStop();
         break;
       default:
         lastComTime = millis();
@@ -175,11 +212,27 @@ void displayNotConnected()
   lcd.print("Not Connected");
 }
 
+void displayConnected()
+{
+  lcd.clear();
+  lcd.backlight();
+  lcd.print("Waiting for");
+  lcd.setCursor(0, 1);
+  lcd.print("session start");
+}
+
 void checkConnected()
 {
   if(lastComTime - millis() > 10000)
   {
+    inSession = false;
     displayNotConnected();
+    return;
+  }
+  else if(connected == false)
+  {
+    connected = true;
+    displayConnected();
   }
 }
 
